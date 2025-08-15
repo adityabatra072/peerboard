@@ -1,17 +1,17 @@
 // File: frontend/src/components/Whiteboard.jsx
-
 import React, { useState, useRef, useContext, useEffect } from 'react';
-import { Stage, Layer, Line, Text } from 'react-konva';
+import { Stage, Layer, Line, Text, Circle, Group, Rect } from 'react-konva';
 import { ThemeContext } from '../context/ThemeContext';
 import { Pen, Type, Highlighter, Pencil, MousePointer, Eraser, Trash2 } from 'lucide-react';
 import io from 'socket.io-client';
 
-const BACKEND_URL = process.env.VITE_BACKEND_URL || 'http://localhost:4000';
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:4000';
 
-const Whiteboard = () => {
+const Whiteboard = ({ boardId, session, setActiveUsers }) => {
   const { theme } = useContext(ThemeContext);
-  const [tool, setTool] = useState('select'); // Default tool is now 'select'
+  const [tool, setTool] = useState('select');
   const [elements, setElements] = useState([]);
+  const [cursors, setCursors] = useState({});
   const [properties, setProperties] = useState({
     stroke: '#000000',
     strokeWidth: 5,
@@ -22,18 +22,70 @@ const Whiteboard = () => {
   const isDrawing = useRef(false);
   const stageRef = useRef(null);
   const [socket, setSocket] = useState(null);
-
-  // --- Start of New Code for Collaboration ---
+  const lastCursorUpdate = useRef({});
 
   useEffect(() => {
     const newSocket = io(BACKEND_URL);
     setSocket(newSocket);
 
+    if (boardId && session?.user) {
+      newSocket.emit('join-board', { boardId, user: session.user });
+    }
+
     newSocket.on('drawing', (data) => {
       setElements(data);
     });
 
-    return () => newSocket.disconnect();
+    newSocket.on('active-users', (users) => {
+      setActiveUsers(users);
+    });
+
+    newSocket.on('cursor-update', (cursorData) => {
+      // Throttle updates to prevent flickering
+      const now = Date.now();
+      const lastUpdate = lastCursorUpdate.current[cursorData.id] || 0;
+      
+      if (now - lastUpdate > 50) { // Update every 50ms max
+        setCursors(prev => ({ 
+          ...prev, 
+          [cursorData.id]: cursorData 
+        }));
+        lastCursorUpdate.current[cursorData.id] = now;
+      }
+    });
+
+    // Clean up disconnected users
+    newSocket.on('user-left', (userId) => {
+      setCursors(prev => {
+        const updated = { ...prev };
+        delete updated[userId];
+        return updated;
+      });
+    });
+
+    return () => {
+      newSocket.disconnect();
+      // Clear all cursors on disconnect
+      setCursors({});
+    };
+  }, [boardId, session, setActiveUsers]);
+
+  useEffect(() => {
+    // Clean up stale cursors periodically
+    const interval = setInterval(() => {
+      const now = Date.now();
+      setCursors(prev => {
+        const updated = {};
+        for (const [id, cursor] of Object.entries(prev)) {
+          if (now - cursor.timestamp < 2000) { // 2 seconds since last update
+            updated[id] = cursor;
+          }
+        }
+        return updated;
+      });
+    }, 1000);
+
+    return () => clearInterval(interval);
   }, []);
 
   const updateElementsAndEmit = (newElements) => {
@@ -43,10 +95,7 @@ const Whiteboard = () => {
     }
   };
 
-  // --- End of New Code for Collaboration ---
-
   const handleMouseDown = (e) => {
-    // In select mode, do not start drawing. Interactions are on the elements themselves.
     if (tool === 'select' || e.target !== stageRef.current) {
       return;
     }
@@ -54,7 +103,7 @@ const Whiteboard = () => {
     isDrawing.current = true;
     const pos = e.target.getStage().getPointerPosition();
     const newElement = {
-      id: `el-${elements.length}`,
+      id: `el-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
       tool,
       points: [pos.x, pos.y],
       ...properties,
@@ -64,20 +113,34 @@ const Whiteboard = () => {
       newElement.text = 'Type here';
       newElement.x = pos.x;
       newElement.y = pos.y;
-      // Flag to trigger auto-editing
-      newElement.isNew = true; 
+      newElement.isNew = true;
     }
-    
+
     updateElementsAndEmit([...elements, newElement]);
   };
 
   const handleMouseMove = (e) => {
+    // Emit cursor position
+    const pos = e.target.getStage().getPointerPosition();
+    if (socket && session?.user) {
+      socket.emit('cursor-move', { 
+        x: pos.x, 
+        y: pos.y, 
+        email: session.user.email,
+        id: session.user.id,
+        timestamp: Date.now()
+      });
+    }
+
+    // Drawing logic
     if (!isDrawing.current || tool === 'select' || tool === 'text') return;
 
     const stage = e.target.getStage();
     const point = stage.getPointerPosition();
     let lastElement = elements[elements.length - 1];
-    
+
+    if (!lastElement || !lastElement.points) return;
+
     lastElement.points = lastElement.points.concat([point.x, point.y]);
 
     const newElements = elements.slice();
@@ -88,7 +151,7 @@ const Whiteboard = () => {
   const handleMouseUp = () => {
     isDrawing.current = false;
   };
-  
+
   const handleDragEnd = (e, index) => {
     const newElements = elements.slice();
     newElements[index] = {
@@ -112,7 +175,7 @@ const Whiteboard = () => {
 
     const textPosition = textNode.absolutePosition();
     const stageBox = stageRef.current.container().getBoundingClientRect();
-    
+   
     const areaPosition = {
       x: stageBox.left + textPosition.x,
       y: stageBox.top + textPosition.y,
@@ -120,7 +183,7 @@ const Whiteboard = () => {
 
     const textarea = document.createElement('textarea');
     document.body.appendChild(textarea);
-    
+   
     textarea.value = textNode.text();
     textarea.style.position = 'absolute';
     textarea.style.top = `${areaPosition.y}px`;
@@ -143,20 +206,19 @@ const Whiteboard = () => {
     const removeTextarea = () => {
       const newElements = elements.slice();
       newElements[index].text = textarea.value;
-      // Remove the isNew flag after editing
-      delete newElements[index].isNew; 
+      delete newElements[index].isNew;
       updateElementsAndEmit(newElements);
       textNode.show();
       textarea.remove();
       window.removeEventListener('click', handleOutsideClick);
     }
-    
+   
     const handleOutsideClick = (evt) => {
       if (evt.target !== textarea) {
         removeTextarea();
       }
     };
-    
+   
     textarea.addEventListener('keydown', (evt) => {
       if (evt.key === 'Enter' && !evt.shiftKey) {
         evt.preventDefault();
@@ -169,7 +231,6 @@ const Whiteboard = () => {
     });
   };
 
-  // Effect to handle auto-editing of new text elements
   useEffect(() => {
     const newTextElement = elements.find(el => el.isNew);
     if (newTextElement) {
@@ -183,7 +244,7 @@ const Whiteboard = () => {
 
   const renderElement = (el, i) => {
     const isSelected = tool === 'select';
-    
+   
     if (el.tool === 'text') {
       return (
         <Text
@@ -215,7 +276,6 @@ const Whiteboard = () => {
         lineJoin="round"
         draggable={isSelected}
         onDragEnd={(e) => handleDragEnd(e, i)}
-        // This is the key change for the eraser
         globalCompositeOperation={
           el.tool === 'eraser' ? 'destination-out' : 'source-over'
         }
@@ -238,6 +298,17 @@ const Whiteboard = () => {
   );
 
   const isPropertiesPanelVisible = !['select'].includes(tool);
+
+  // Function to generate a unique color for each user
+  const getUserColor = (userId) => {
+    const colors = [
+      '#FF6B6B', '#4ECDC4', '#FFD166', '#6A0572', 
+      '#1A535C', '#FF9F1C', '#2EC4B6', '#E71D36',
+      '#662E9B', '#F86624', '#3A86FF', '#FB5607'
+    ];
+    const index = Math.abs(userId.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0)) % colors.length;
+    return colors[index];
+  };
 
   return (
     <div className={`w-full h-full transition-colors ${theme === 'light' ? 'bg-gray-100' : 'bg-gray-800'}`}>
@@ -287,7 +358,7 @@ const Whiteboard = () => {
                   />
                 </div>
               )}
-    
+   
               {tool === 'text' && (
                 <>
                   <div className="flex items-center gap-2">
@@ -303,8 +374,8 @@ const Whiteboard = () => {
                   </div>
                   <div className="flex items-center gap-2">
                     <label className="text-sm text-gray-600 dark:text-gray-300">Font</label>
-                    <select 
-                      value={properties.fontFamily} 
+                    <select
+                      value={properties.fontFamily}
                       onChange={(e) => handlePropertyChange('fontFamily', e.target.value)}
                       className="bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 rounded p-1 text-sm"
                     >
@@ -345,7 +416,57 @@ const Whiteboard = () => {
         ref={stageRef}
       >
         <Layer>
-          {elements.map(renderElement)}
+          {elements.map((el, i) => renderElement(el, i))}
+        </Layer>
+        
+        {/* Cursor layer */}
+        <Layer>
+          {Object.values(cursors)
+            .filter(cursor => cursor.id !== session?.user?.id)
+            .map(cursor => {
+              const userColor = getUserColor(cursor.id);
+              const email = cursor.email || 'Collaborator';
+              const displayName = email.split('@')[0];
+              
+              return (
+                <Group key={cursor.id}>
+                  <Circle 
+                    x={cursor.x} 
+                    y={cursor.y} 
+                    radius={6} 
+                    fill={userColor}
+                    stroke="white"
+                    strokeWidth={1.5}
+                  />
+                  <Group
+                    x={cursor.x + 15}
+                    y={cursor.y - 25}
+                  >
+                    <Rect
+                      width={displayName.length * 8 + 20}
+                      height={26}
+                      fill={userColor}
+                      cornerRadius={5}
+                      shadowColor="rgba(0,0,0,0.3)"
+                      shadowBlur={5}
+                      shadowOffsetY={2}
+                      shadowOpacity={0.2}
+                    />
+                    <Text
+                      text={displayName}
+                      fontSize={14}
+                      fill="white"
+                      fontStyle="bold"
+                      width={displayName.length * 8 + 20}
+                      height={26}
+                      align="center"
+                      verticalAlign="middle"
+                      padding={5}
+                    />
+                  </Group>
+                </Group>
+              );
+            })}
         </Layer>
       </Stage>
     </div>
