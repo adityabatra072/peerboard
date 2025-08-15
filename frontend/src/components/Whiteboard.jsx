@@ -4,6 +4,7 @@ import { Stage, Layer, Line, Text, Circle, Group, Rect } from 'react-konva';
 import { ThemeContext } from '../context/ThemeContext';
 import { Pen, Type, Highlighter, Pencil, MousePointer, Eraser, Trash2 } from 'lucide-react';
 import io from 'socket.io-client';
+import { supabase } from '../supabaseClient';
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:4000';
 
@@ -11,7 +12,6 @@ const Whiteboard = ({ boardId, session, setActiveUsers }) => {
   const { theme } = useContext(ThemeContext);
   const [tool, setTool] = useState('select');
   const [elements, setElements] = useState([]);
-  const [cursors, setCursors] = useState({});
   const [properties, setProperties] = useState({
     stroke: '#000000',
     strokeWidth: 5,
@@ -19,21 +19,101 @@ const Whiteboard = ({ boardId, session, setActiveUsers }) => {
     fontSize: 20,
     fontFamily: 'Arial',
   });
+  
+  const [cursors, setCursors] = useState({});
+  const [isLoading, setIsLoading] = useState(true);
+  const [isTabActive, setIsTabActive] = useState(true);
   const isDrawing = useRef(false);
   const stageRef = useRef(null);
   const [socket, setSocket] = useState(null);
   const lastCursorUpdate = useRef({});
+  const elementsRef = useRef(elements);
+  
+  // Update ref whenever elements change
+  useEffect(() => {
+    elementsRef.current = elements;
+  }, [elements]);
+
+  // Save elements to Supabase
+  const saveBoardData = async (elementsToSave = elementsRef.current) => {
+    if (!boardId) return;
+    
+    try {
+      const { error } = await supabase
+        .from('boards')
+        .upsert({ 
+          id: boardId,
+          user_id: session?.user?.id,
+          data: { elements: elementsToSave }
+        });
+
+      if (error) {
+        console.error('Error saving board data:', error);
+        return false;
+      }
+      return true;
+    } catch (error) {
+      console.error('Error in saveBoardData:', error);
+      return false;
+    }
+  };
+
+  // Fetch board data from Supabase
+  const fetchBoardData = async () => {
+    if (!boardId) return;
+    
+    try {
+      const { data, error } = await supabase
+        .from('boards')
+        .select('data')
+        .eq('id', boardId);
+        
+      if (error) {
+        console.error('Error fetching board data:', error);
+        return;
+      }
+
+      if (data && data.length > 0 && data[0].data && data[0].data.elements) {
+        setElements(data[0].data.elements);
+      }
+    } catch (error) {
+      console.error('Error in fetchBoardData:', error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Force reload board data when tab becomes active
+  const reloadBoardData = async () => {
+    setIsLoading(true);
+    await fetchBoardData();
+    
+    // Emit to socket to sync with other users
+    if (socket) {
+      socket.emit('drawing', elementsRef.current);
+    }
+  };
 
   useEffect(() => {
+    if (!boardId) return;
+    
+    // Create socket connection
     const newSocket = io(BACKEND_URL);
     setSocket(newSocket);
+    
+    // Fetch initial board data
+    fetchBoardData();
 
-    if (boardId && session?.user) {
+    // Join board
+    if (session?.user) {
       newSocket.emit('join-board', { boardId, user: session.user });
     }
 
+    // Socket event handlers
     newSocket.on('drawing', (data) => {
-      setElements(data);
+      if (isTabActive && JSON.stringify(data) !== JSON.stringify(elementsRef.current)) {
+        setElements(data);
+      }
     });
 
     newSocket.on('active-users', (users) => {
@@ -45,7 +125,7 @@ const Whiteboard = ({ boardId, session, setActiveUsers }) => {
       const now = Date.now();
       const lastUpdate = lastCursorUpdate.current[cursorData.id] || 0;
       
-      if (now - lastUpdate > 50) { // Update every 50ms max
+      if (now - lastUpdate > 50) {
         setCursors(prev => ({ 
           ...prev, 
           [cursorData.id]: cursorData 
@@ -63,10 +143,24 @@ const Whiteboard = ({ boardId, session, setActiveUsers }) => {
       });
     });
 
+    // Tab visibility detection
+    const handleVisibilityChange = () => {
+      const isActive = document.visibilityState === 'visible';
+      setIsTabActive(isActive);
+      
+      if (isActive) {
+        // Force reload when tab becomes active
+        reloadBoardData();
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    // Cleanup function
     return () => {
       newSocket.disconnect();
-      // Clear all cursors on disconnect
       setCursors({});
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
   }, [boardId, session, setActiveUsers]);
 
@@ -77,7 +171,7 @@ const Whiteboard = ({ boardId, session, setActiveUsers }) => {
       setCursors(prev => {
         const updated = {};
         for (const [id, cursor] of Object.entries(prev)) {
-          if (now - cursor.timestamp < 2000) { // 2 seconds since last update
+          if (now - cursor.timestamp < 2000) {
             updated[id] = cursor;
           }
         }
@@ -88,15 +182,8 @@ const Whiteboard = ({ boardId, session, setActiveUsers }) => {
     return () => clearInterval(interval);
   }, []);
 
-  const updateElementsAndEmit = (newElements) => {
-    setElements(newElements);
-    if (socket) {
-      socket.emit('drawing', newElements);
-    }
-  };
-
   const handleMouseDown = (e) => {
-    if (tool === 'select' || e.target !== stageRef.current) {
+    if (tool === 'select' || e.target !== stageRef.current || isLoading || !isTabActive) {
       return;
     }
 
@@ -116,13 +203,18 @@ const Whiteboard = ({ boardId, session, setActiveUsers }) => {
       newElement.isNew = true;
     }
 
-    updateElementsAndEmit([...elements, newElement]);
+    const newElements = [...elements, newElement];
+    setElements(newElements);
+    
+    // Emit and save immediately
+    if (socket) socket.emit('drawing', newElements);
+    saveBoardData(newElements);
   };
 
   const handleMouseMove = (e) => {
     // Emit cursor position
     const pos = e.target.getStage().getPointerPosition();
-    if (socket && session?.user) {
+    if (socket && session?.user && isTabActive) {
       socket.emit('cursor-move', { 
         x: pos.x, 
         y: pos.y, 
@@ -133,7 +225,7 @@ const Whiteboard = ({ boardId, session, setActiveUsers }) => {
     }
 
     // Drawing logic
-    if (!isDrawing.current || tool === 'select' || tool === 'text') return;
+    if (!isDrawing.current || tool === 'select' || tool === 'text' || isLoading || !isTabActive) return;
 
     const stage = e.target.getStage();
     const point = stage.getPointerPosition();
@@ -143,34 +235,62 @@ const Whiteboard = ({ boardId, session, setActiveUsers }) => {
 
     lastElement.points = lastElement.points.concat([point.x, point.y]);
 
-    const newElements = elements.slice();
+    const newElements = [...elements];
     newElements[newElements.length - 1] = lastElement;
-    updateElementsAndEmit(newElements);
+    setElements(newElements);
+    
+    // Emit continuously for real-time collaboration
+    if (socket) socket.emit('drawing', newElements);
   };
 
   const handleMouseUp = () => {
-    isDrawing.current = false;
+    if (isDrawing.current) {
+      isDrawing.current = false;
+      // Save final state after drawing
+      saveBoardData();
+    }
   };
 
   const handleDragEnd = (e, index) => {
-    const newElements = elements.slice();
+    const newElements = [...elements];
     newElements[index] = {
       ...newElements[index],
       x: e.target.x(),
       y: e.target.y(),
     };
-    updateElementsAndEmit(newElements);
+    setElements(newElements);
+    
+    // Emit and save immediately
+    if (socket) socket.emit('drawing', newElements);
+    saveBoardData();
   };
 
   const handlePropertyChange = (prop, value) => {
     setProperties(prev => ({ ...prev, [prop]: value }));
   };
 
-  const handleClearCanvas = () => {
-    updateElementsAndEmit([]);
+  // INSTANT CLEAR CANVAS WITH GUARANTEED PERSISTENCE
+  const handleClearCanvas = async () => {
+    if (!isTabActive) return;
+    
+    // Create an empty array for the cleared state
+    const clearedState = [];
+    
+    // Optimistic UI update
+    setElements(clearedState);
+    
+    // Immediately emit to all users
+    if (socket) socket.emit('drawing', clearedState);
+    
+    // Force immediate save to database without waiting
+    await saveBoardData(clearedState);
+    
+    console.log("Canvas cleared and persisted instantly");
   };
 
   const editTextNode = (textNode, index) => {
+    if (!isTabActive) return;
+    
     textNode.hide();
 
     const textPosition = textNode.absolutePosition();
@@ -204,10 +324,15 @@ const Whiteboard = ({ boardId, session, setActiveUsers }) => {
     textarea.focus();
 
     const removeTextarea = () => {
-      const newElements = elements.slice();
+      const newElements = [...elements];
       newElements[index].text = textarea.value;
       delete newElements[index].isNew;
-      updateElementsAndEmit(newElements);
+      setElements(newElements);
+      
+      // Emit and save immediately
+      if (socket) socket.emit('drawing', newElements);
+      saveBoardData();
+      
       textNode.show();
       textarea.remove();
       window.removeEventListener('click', handleOutsideClick);
@@ -232,6 +357,8 @@ const Whiteboard = ({ boardId, session, setActiveUsers }) => {
   };
 
   useEffect(() => {
+    if (isLoading || !isTabActive) return;
+    
     const newTextElement = elements.find(el => el.isNew);
     if (newTextElement) {
       const textNode = stageRef.current.findOne(`#${newTextElement.id}`);
@@ -240,7 +367,7 @@ const Whiteboard = ({ boardId, session, setActiveUsers }) => {
         editTextNode(textNode, index);
       }
     }
-  }, [elements]);
+  }, [elements, isLoading, isTabActive]);
 
   const renderElement = (el, i) => {
     const isSelected = tool === 'select';
@@ -310,6 +437,14 @@ const Whiteboard = ({ boardId, session, setActiveUsers }) => {
     return colors[index];
   };
 
+  if (isLoading) {
+    return (
+      <div className={`w-full h-full flex items-center justify-center ${theme === 'light' ? 'bg-gray-100' : 'bg-gray-800'}`}>
+        <div className="text-xl">Loading board...</div>
+      </div>
+    );
+  }
+
   return (
     <div className={`w-full h-full transition-colors ${theme === 'light' ? 'bg-gray-100' : 'bg-gray-800'}`}>
       {/* Toolbar */}
@@ -323,8 +458,13 @@ const Whiteboard = ({ boardId, session, setActiveUsers }) => {
         <div className="border-l border-gray-300 dark:border-gray-600 mx-1"></div>
         <button
           onClick={handleClearCanvas}
-          className="p-3 rounded-lg transition-colors bg-red-500 text-white hover:bg-red-600"
-          title="Clear Canvas"
+          disabled={!isTabActive}
+          className={`p-3 rounded-lg transition-colors ${
+            !isTabActive 
+              ? 'opacity-50 cursor-not-allowed' 
+              : 'bg-red-500 text-white hover:bg-red-600'
+          }`}
+          title={!isTabActive ? "Cannot clear while tab is inactive" : "Clear Canvas"}
         >
           <Trash2 size={24} />
         </button>
