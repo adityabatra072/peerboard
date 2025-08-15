@@ -10,8 +10,11 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "konva": "^9.3.22",
+    "lucide-react": "^0.539.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
+    "react-konva": "^19.0.7",
     "socket.io-client": "^4.8.1"
   },
   "devDependencies": {
