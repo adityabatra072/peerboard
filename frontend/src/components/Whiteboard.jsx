@@ -1,4 +1,3 @@
-// File: frontend/src/components/Whiteboard.jsx
 import React, { useState, useRef, useContext, useEffect } from 'react';
 import { Stage, Layer, Line, Text, Circle, Group, Rect } from 'react-konva';
 import { ThemeContext } from '../context/ThemeContext';

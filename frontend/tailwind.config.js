@@ -1,4 +1,3 @@
-// File: frontend/tailwind.config.js
 /** @type {import('tailwindcss').Config} */
 export default {
   darkMode: 'class', // This is the line to add or change

@@ -1,5 +1,3 @@
-// File: frontend/src/components/LoginPage.jsx
-
 import React from 'react';
 import { supabase } from '../supabaseClient';
 import { Github, Chrome } from 'lucide-react';

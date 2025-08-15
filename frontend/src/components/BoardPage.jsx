@@ -1,5 +1,3 @@
-// File: frontend/src/components/BoardPage.jsx
-
 import React, { useState } from 'react';
 import { useParams } from 'react-router-dom';
 import Whiteboard from './Whiteboard';
