@@ -131,4 +131,4 @@ This project is distributed under the MIT License. See `LICENSE` for more inform
 
 ## 🤝 Contact
 
-Your Name - [aditya@singularitytech.in](mailto:aditya@singularitytech.in)
+Aditya Batra - [aditya@singularitytech.in](mailto:aditya@singularitytech.in)
