@@ -1,31 +1,28 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowRight, Plus } from 'lucide-react';
+import { ArrowRight, Plus, Github } from 'lucide-react';
 
 const BoardHub = () => {
   const [boardIdInput, setBoardIdInput] = useState('');
   const navigate = useNavigate();
 
   const handleCreateBoard = () => {
-    const newBoardId = crypto?.randomUUID?.() || Math.random().toString(36).substring(2, 10);
+    const newBoardId = crypto.randomUUID();
     navigate(`/board/${newBoardId}`);
   };
 
   const handleJoinBoard = (e) => {
     e.preventDefault();
-    const input = boardIdInput.trim();
-    if (!input) return;
-
-    try {
-      const url = new URL(input);
-      const pathParts = url.pathname.split('/');
-      const id = pathParts[pathParts.length - 1];
-      navigate(`/board/${id.toLowerCase()}`);
-    } catch (_) {
-      // Assume it's just an ID
-      navigate(`/board/${input.toLowerCase()}`);
+    if (boardIdInput.trim()) {
+      try {
+        const url = new URL(boardIdInput);
+        const pathParts = url.pathname.split('/');
+        const id = pathParts[pathParts.length - 1];
+        navigate(`/board/${id}`);
+      } catch (_) {
+        navigate(`/board/${boardIdInput.trim()}`);
+      }
     }
-    setBoardIdInput(''); // reset input
   };
 
   return (
@@ -75,6 +72,18 @@ const BoardHub = () => {
           </div>
         </div>
       </div>
+
+      {/* GitHub Link */}
+      <a
+        href="https://github.com/adityabatra072/peerboard"
+        target="_blank"
+        rel="noopener noreferrer"
+        className="absolute bottom-4 right-4 z-20 flex items-center gap-2 text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-white transition-colors"
+        title="View project on GitHub"
+      >
+        <Github size={20} />
+        <span className="text-sm font-medium hidden sm:inline">View on GitHub</span>
+      </a>
     </div>
   );
 };

@@ -45,6 +45,18 @@ const LoginPage = () => {
           </div>
         </div>
       </div>
+
+      {/* GitHub Link */}
+      <a
+        href="https://github.com/adityabatra072/peerboard"
+        target="_blank"
+        rel="noopener noreferrer"
+        className="absolute bottom-4 right-4 z-20 flex items-center gap-2 text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-white transition-colors"
+        title="View project on GitHub"
+      >
+        <Github size={20} />
+        <span className="text-sm font-medium hidden sm:inline">View on GitHub</span>
+      </a>
     </div>
   );
 };
