@@ -61,7 +61,7 @@ To get a local copy up and running, follow these simple steps.
 
 2.  **Set up Supabase:**
     * Create a new project on Supabase.
-    * Go to the **SQL Editor** and run the SQL script found in `database_setup.sql` to create the `boards` table and its policies.
+    * Go to the **SQL Editor** and run the SQL script found in [database_setup.sql](database_setup.sql) to create the `boards` table and its policies.
     * Go to **Project Settings > API** and find your **Project URL** and `anon` **public API Key**.
 
 3.  **Configure Backend:**
@@ -125,7 +125,7 @@ This project is designed for a seamless, zero-cost deployment.
 
 ## 📜 License
 
-This project is distributed under the MIT License. See `LICENSE` for more information.
+This project is distributed under the MIT License. See [License](LICENSE) for more information.
 
 ---
 
