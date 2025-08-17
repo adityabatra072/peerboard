@@ -27,6 +27,7 @@ const Whiteboard = ({ boardId, session, setActiveUsers }) => {
   const [socket, setSocket] = useState(null);
   const lastCursorUpdate = useRef({});
   const elementsRef = useRef(elements);
+  const currentElementId = useRef(null); // Track current drawing element
   
   // Update ref whenever elements change
   useEffect(() => {
@@ -110,8 +111,31 @@ const Whiteboard = ({ boardId, session, setActiveUsers }) => {
 
     // Socket event handlers
     newSocket.on('drawing', (data) => {
-      if (isTabActive && JSON.stringify(data) !== JSON.stringify(elementsRef.current)) {
-        setElements(data);
+      if (isTabActive) {
+        // Merge remote elements with local drawing
+        const mergedElements = [...data];
+        
+        // Preserve current drawing if exists
+        if (currentElementId.current) {
+          const localElementIndex = elementsRef.current.findIndex(
+            el => el.id === currentElementId.current
+          );
+          
+          if (localElementIndex !== -1) {
+            const localElement = elementsRef.current[localElementIndex];
+            const remoteIndex = mergedElements.findIndex(
+              el => el.id === currentElementId.current
+            );
+            
+            if (remoteIndex !== -1) {
+              mergedElements[remoteIndex] = localElement;
+            } else {
+              mergedElements.push(localElement);
+            }
+          }
+        }
+        
+        setElements(mergedElements);
       }
     });
 
@@ -192,6 +216,7 @@ const Whiteboard = ({ boardId, session, setActiveUsers }) => {
       id: `el-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
       tool,
       points: [pos.x, pos.y],
+      userId: session?.user?.id, // Track which user created the element
       ...properties,
     };
 
@@ -202,6 +227,7 @@ const Whiteboard = ({ boardId, session, setActiveUsers }) => {
       newElement.isNew = true;
     }
 
+    currentElementId.current = newElement.id; // Track current element
     const newElements = [...elements, newElement];
     setElements(newElements);
     
@@ -228,24 +254,27 @@ const Whiteboard = ({ boardId, session, setActiveUsers }) => {
 
     const stage = e.target.getStage();
     const point = stage.getPointerPosition();
-    let lastElement = elements[elements.length - 1];
-
-    if (!lastElement || !lastElement.points) return;
-
-    lastElement.points = lastElement.points.concat([point.x, point.y]);
-
-    const newElements = [...elements];
-    newElements[newElements.length - 1] = lastElement;
-    setElements(newElements);
     
-    // Emit continuously for real-time collaboration
-    if (socket) socket.emit('drawing', newElements);
+    // Only update the current user's element
+    const newElements = [...elements];
+    const currentElementIndex = newElements.findIndex(
+      el => el.id === currentElementId.current
+    );
+    
+    if (currentElementIndex !== -1) {
+      const lastElement = newElements[currentElementIndex];
+      lastElement.points = [...lastElement.points, point.x, point.y];
+      setElements(newElements);
+      
+      // Emit continuously for real-time collaboration
+      if (socket) socket.emit('drawing', newElements);
+    }
   };
 
   const handleMouseUp = () => {
     if (isDrawing.current) {
       isDrawing.current = false;
-      // Save final state after drawing
+      currentElementId.current = null; // Reset current element
       saveBoardData();
     }
   };
